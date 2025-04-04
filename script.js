@@ -103,8 +103,23 @@ const map2 = [
 
 // Preload all textures
 const loader = new THREE.CubeTextureLoader(loadingManager);
-let cubeTexture1 = loader.load(map1);
-let cubeTexture2 = loader.load(map2);
+
+// Get maximum anisotropy value supported by the GPU
+const maxAnisotropy = renderer.capabilities.getMaxAnisotropy();
+console.log(`Maximum anisotropy: ${maxAnisotropy}`);
+
+// Load textures with anisotropic filtering
+let cubeTexture1 = loader.load(map1, function(texture) {
+    texture.anisotropy = maxAnisotropy;
+});
+
+let cubeTexture2 = loader.load(map2, function(texture) {
+    texture.anisotropy = maxAnisotropy;
+});
+
+map1.mapping =  THREE.CubeReflectionMapping; 
+map2.mapping =  THREE.CubeReflectionMapping; 
+
 let cubeTexture = cubeTexture1;
 scene.background = cubeTexture;
 
@@ -114,6 +129,24 @@ const mouse = new THREE.Vector2();
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.target.set(0, 0, -0.001); 
 controls.update();
+
+const shinyMaterial = new THREE.MeshPhysicalMaterial({
+    color: 0xffffff,         // White base color
+    metalness: 0.8,          // Fully metallic (shiny)
+    roughness: 0.2,          // Perfectly smooth surface
+    // clearcoat: 1.0,          // Extra shininess (like car paint)
+    // clearcoatRoughness: 0.0, // Keep clearcoat smooth
+    envMap: scene.background,          // Set the environment map
+    envMapIntensity: 1.5,    // Strength of reflections
+  });
+
+const geometry = new THREE.SphereGeometry(1, 64, 64);
+const sphere = new THREE.Mesh(geometry, shinyMaterial);
+sphere.position.set(5, -1.5, -15.2)
+scene.add(sphere);
+
+const ambient = new THREE.AmbientLight(0xffffff, 2);
+scene.add(ambient)
 
 const ringGeometry = new THREE.CircleGeometry(0.3, 32, 0, Math.PI*2);
 ringGeometry.rotateX(-Math.PI / 2);
@@ -130,8 +163,10 @@ scene.add(ring);
 function switchPosition(){
     if(flag){
         ring.position.set(0, -1.5, -5.2);
+        sphere.position.set(5, -1.5, -15.2)
     }else{
         ring.position.set(0, -1.5, 5.2);
+        sphere.position.set(5, -1.5, 0)
     }
 }
 
