@@ -1,267 +1,198 @@
-import * as THREE from 'three';
-import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import * as THREE from "three";
+import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js";
+import { RenderPass } from "three/addons/postprocessing/RenderPass.js";
+import { ShaderPass } from "three/addons/postprocessing/ShaderPass.js";
 
-// Create loading manager and loading screen elements
-const loadingManager = new THREE.LoadingManager();
-const loadingScreen = document.createElement('div');
-const loadingBar = document.createElement('div');
-const loadingText = document.createElement('div');
+const ZoomInShader = {
+  uniforms: {
+    tDiffuse: { value: null },
+    zoom: { value: 1.0 },
+  },
+  vertexShader: `
+    varying vec2 vUv;
+    void main() {
+      vUv = uv;
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    }
+  `,
+  fragmentShader: `
+    uniform sampler2D tDiffuse;
+    uniform float zoom;
+    varying vec2 vUv;
 
-// Set up loading screen styling
-loadingScreen.style.position = 'fixed';
-loadingScreen.style.top = '0';
-loadingScreen.style.left = '0';
-loadingScreen.style.width = '100%';
-loadingScreen.style.height = '100%';
-loadingScreen.style.background = '#000';
-loadingScreen.style.display = 'flex';
-loadingScreen.style.flexDirection = 'column';
-loadingScreen.style.alignItems = 'center';
-loadingScreen.style.justifyContent = 'center';
-loadingScreen.style.zIndex = '1000';
+    #include <common>
 
-// Set up loading bar styling
-loadingBar.style.width = '50%';
-loadingBar.style.height = '10px';
-loadingBar.style.background = '#333';
-loadingBar.style.borderRadius = '5px';
-loadingBar.style.overflow = 'hidden';
-loadingBar.style.margin = '20px 0';
+    vec3 LinearTosRGB(vec3 linearRGB) {
+        bvec3 cutoff = lessThan(linearRGB, vec3(0.0031308));
+        vec3 higher = vec3(1.055) * pow(linearRGB, vec3(1.0 / 2.4)) - vec3(0.055);
+        vec3 lower = linearRGB * vec3(12.92);
+        return mix(higher, lower, cutoff);
+    }
 
-// Create progress element inside loading bar
-const progress = document.createElement('div');
-progress.style.width = '0%';
-progress.style.height = '100%';
-progress.style.background = '#ff9900';
-progress.style.transition = 'width 0.2s';
-loadingBar.appendChild(progress);
-
-// Set up loading text styling
-loadingText.textContent = 'Loading textures...';
-loadingText.style.color = '#fff';
-loadingText.style.fontFamily = 'Arial, sans-serif';
-loadingText.style.fontSize = '18px';
-
-// Add elements to loading screen and body
-loadingScreen.appendChild(loadingText);
-loadingScreen.appendChild(loadingBar);
-document.body.appendChild(loadingScreen);
-
-// Configure loading manager callbacks
-loadingManager.onProgress = function (url, itemsLoaded, itemsTotal) {
-    const progressPercent = (itemsLoaded / itemsTotal) * 100;
-    progress.style.width = progressPercent + '%';
-    loadingText.textContent = `Loading textures... ${Math.floor(progressPercent)}%`;
-};
-
-loadingManager.onLoad = function () {
-    // Hide loading screen with fade-out effect
-    loadingScreen.style.transition = 'opacity 1s';
-    loadingScreen.style.opacity = '0';
-    
-    // Remove loading screen after fade-out
-    setTimeout(() => {
-        document.body.removeChild(loadingScreen);
-    }, 1000);
-    
-    // Start the animation loop
-    animate();
-};
-
-loadingManager.onError = function (url) {
-    console.error('Error loading', url);
-    loadingText.textContent = 'Error loading textures. Please refresh the page.';
-    loadingText.style.color = '#ff0000';
+    void main() {
+        vec2 zoomedUV = 0.5 + (vUv - 0.5) / zoom;
+        vec4 color = texture2D(tDiffuse, zoomedUV);
+        gl_FragColor = vec4(LinearTosRGB(color.rgb), color.a);
+    }
+  `,
 };
 
 // Scene setup
 const scene = new THREE.Scene();
-const camera = new THREE.PerspectiveCamera(55, window.innerWidth / window.innerHeight, 0.1, 1000);
+const camera = new THREE.PerspectiveCamera(
+  55,
+  window.innerWidth / window.innerHeight,
+  0.1,
+  1000
+);
 const renderer = new THREE.WebGLRenderer();
 renderer.setPixelRatio(window.devicePixelRatio);
 renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.outputColorSpace = THREE.SRGBColorSpace;
 document.body.appendChild(renderer.domElement);
 
-let flag = true;
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.target.set(0, 0, -0.001);
+controls.update();
 
+// Load cube textures
+const loader = new THREE.CubeTextureLoader();
 const map1 = [
-    './assets/map1/left.jpg', 
-    './assets/map1/right.jpg', 
-    './assets/map1/up.jpg', 
-    './assets/map1/down.jpg', 
-    './assets/map1/front.jpg',  
-    './assets/map1/back.jpg', 
+  "./assets/map1/left.jpg",
+  "./assets/map1/right.jpg",
+  "./assets/map1/up.jpg",
+  "./assets/map1/down.jpg",
+  "./assets/map1/front.jpg",
+  "./assets/map1/back.jpg",
 ];
 const map2 = [
-    './assets/map2/left.jpg', 
-    './assets/map2/right.jpg', 
-    './assets/map2/up.jpg', 
-    './assets/map2/down.jpg', 
-    './assets/map2/front.jpg',  
-    './assets/map2/back.jpg', 
+  "./assets/map2/left.jpg",
+  "./assets/map2/right.jpg",
+  "./assets/map2/up.jpg",
+  "./assets/map2/down.jpg",
+  "./assets/map2/front.jpg",
+  "./assets/map2/back.jpg",
 ];
-
-// Preload all textures
-const loader = new THREE.CubeTextureLoader(loadingManager);
-
-// Get maximum anisotropy value supported by the GPU
-const maxAnisotropy = renderer.capabilities.getMaxAnisotropy();
-console.log(`Maximum anisotropy: ${maxAnisotropy}`);
-
-// Load textures with anisotropic filtering
-let cubeTexture1 = loader.load(map1, function(texture) {
-    texture.anisotropy = maxAnisotropy;
-});
-
-let cubeTexture2 = loader.load(map2, function(texture) {
-    texture.anisotropy = maxAnisotropy;
-});
-
-map1.mapping =  THREE.CubeReflectionMapping; 
-map2.mapping =  THREE.CubeReflectionMapping; 
-
+let cubeTexture1 = loader.load(map1);
+let cubeTexture2 = loader.load(map2);
+let currentMap = 1;
 let cubeTexture = cubeTexture1;
 scene.background = cubeTexture;
 
-const raycaster = new THREE.Raycaster();
-const mouse = new THREE.Vector2();
-
-const controls = new OrbitControls(camera, renderer.domElement);
-controls.target.set(0, 0, -0.001); 
-controls.update();
-
+// Add reflective sphere and ring
 const shinyMaterial = new THREE.MeshPhysicalMaterial({
-    color: 0xffffff,         // White base color
-    metalness: 0.8,          // Fully metallic (shiny)
-    roughness: 0.2,          // Perfectly smooth surface
-    // clearcoat: 1.0,          // Extra shininess (like car paint)
-    // clearcoatRoughness: 0.0, // Keep clearcoat smooth
-    envMap: scene.background,          // Set the environment map
-    envMapIntensity: 1.5,    // Strength of reflections
-  });
+  color: 0xffffff,
+  metalness: 0.8,
+  roughness: 0.2,
+  envMap: scene.background,
+  envMapIntensity: 1.5,
+});
 
 const geometry = new THREE.SphereGeometry(1, 64, 64);
 const sphere = new THREE.Mesh(geometry, shinyMaterial);
-sphere.position.set(5, -1.5, -15.2)
+sphere.position.set(5, -1.5, -15.2);
 scene.add(sphere);
 
-const ambient = new THREE.AmbientLight(0xffffff, 2);
-scene.add(ambient)
-
-const ringGeometry = new THREE.CircleGeometry(0.3, 32, 0, Math.PI*2);
+const ringGeometry = new THREE.CircleGeometry(0.3, 32);
 ringGeometry.rotateX(-Math.PI / 2);
-
-const ringMaterial = new THREE.MeshBasicMaterial({ 
-    color: 0xff9900, 
-    side: THREE.DoubleSide,
+const ringMaterial = new THREE.MeshBasicMaterial({
+  color: 0xff9900,
+  side: THREE.DoubleSide,
 });
 const ring = new THREE.Mesh(ringGeometry, ringMaterial);
-
 ring.position.set(0, -1.5, -5.2);
 scene.add(ring);
 
-function switchPosition(){
-    if(flag){
-        ring.position.set(0, -1.5, -5.2);
-        sphere.position.set(5, -1.5, -15.2)
-    }else{
-        ring.position.set(0, -1.5, 5.2);
-        sphere.position.set(5, -1.5, 0)
-    }
+const raycaster = new THREE.Raycaster();
+const mouse = new THREE.Vector2();
+let transitioning = false;
+
+function switchPosition(flag) {
+  if (flag) {
+    ring.position.set(0, -1.5, -5.2);
+    sphere.position.set(5, -1.5, -15.2);
+  } else {
+    ring.position.set(0, -1.5, 5.2);
+    sphere.position.set(5, -1.5, 0);
+  }
 }
 
-let scale = 1;
-let scaleDirection = 0.005;
+// Composer setup
+const composer = new EffectComposer(renderer);
+composer.addPass(new RenderPass(scene, camera));
+const zoomPass = new ShaderPass(ZoomInShader);
+composer.addPass(zoomPass);
+zoomPass.enabled = false;
 
-let transitioning = false;
-let currentMap = 1;
+let flag = true;
+function transitionToNewMap() {
+  transitioning = true;
+  flag = !flag;
+  switchPosition(flag);
+
+  zoomPass.enabled = true;
+  zoomPass.uniforms.zoom.value = 1.0;
+
+  let zoomValue = 1.0;
+  const zoomInInterval = setInterval(() => {
+    zoomValue += 0.05;
+    zoomPass.uniforms.zoom.value = zoomValue;
+
+    if (zoomValue >= 3.0) {
+      clearInterval(zoomInInterval);
+
+      if (currentMap === 1) {
+        cubeTexture = cubeTexture2;
+        currentMap = 2;
+      } else {
+        cubeTexture = cubeTexture1;
+        currentMap = 1;
+      }
+      scene.background = cubeTexture;
+
+      zoomPass.uniforms.zoom.value = 1.0;
+      zoomPass.enabled = false;
+      transitioning = false;
+    }
+  }, 5);
+}
 
 function onClick(event) {
-    mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
-    mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
-    
-    raycaster.setFromCamera(mouse, camera);
-    
-    const intersects = raycaster.intersectObject(ring);
-    
-    if (intersects.length > 0 && !transitioning) {
-        transitionToNewMap();
-    }
-}
+  mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+  mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
 
-function transitionToNewMap() {
-    transitioning = true;
-    flag = !flag;
-    switchPosition();
-    
-    let opacity = 1;
-    const fadeOutInterval = setInterval(() => {
-        opacity -= 0.05;
-        ringMaterial.opacity = opacity * 0.8;
-        
-        if (opacity <= 0) {
-            clearInterval(fadeOutInterval);
-            
-            // Use preloaded textures
-            if (currentMap === 1) {
-                cubeTexture = cubeTexture2;
-                currentMap = 2;
-            } else {
-                cubeTexture = cubeTexture1;
-                currentMap = 1;
-            }
-            scene.background = cubeTexture;
-            
-            let newOpacity = 0;
-            const fadeInInterval = setInterval(() => {
-                newOpacity += 0.05;
-                ringMaterial.opacity = newOpacity * 0.8;
-                
-                if (newOpacity >= 1) {
-                    clearInterval(fadeInInterval);
-                    transitioning = false;
-                }
-            }, 30);
-        }
-    }, 30);
+  raycaster.setFromCamera(mouse, camera);
+  const intersects = raycaster.intersectObject(ring);
+
+  if (intersects.length > 0 && !transitioning) {
+    transitionToNewMap();
+  }
 }
 
 function onMouseMove(event) {
-    mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
-    mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
-    
-    raycaster.setFromCamera(mouse, camera);
-    const intersects = raycaster.intersectObject(ring);
-    
-    if (intersects.length > 0) {
-        document.body.style.cursor = 'pointer';
-    } else {
-        document.body.style.cursor = 'auto';
-    }
+  mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+  mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+
+  raycaster.setFromCamera(mouse, camera);
+  const intersects = raycaster.intersectObject(ring);
+
+  document.body.style.cursor = intersects.length > 0 ? "pointer" : "auto";
 }
 
 function animate() {
-    requestAnimationFrame(animate);
-    
-    if (!transitioning) {
-        scale += scaleDirection;
-        if (scale > 1.1 || scale < 0.9) {
-            scaleDirection *= -1;
-        }
-        ring.scale.set(scale, scale, scale);
-    }
-    
-    controls.update();
-    renderer.render(scene, camera);
+  requestAnimationFrame(animate);
+  controls.update();
+  composer.render();
 }
 
-window.addEventListener('click', onClick);
-window.addEventListener('mousemove', onMouseMove);
-window.addEventListener('resize', () => {
-    camera.aspect = window.innerWidth / window.innerHeight;
-    camera.updateProjectionMatrix();
-    renderer.setSize(window.innerWidth, window.innerHeight);
-});
+animate();
 
-// Note: animate() is now called in the loadingManager.onLoad callback
-// This prevents rendering until all assets are loaded
+window.addEventListener("click", onClick);
+window.addEventListener("mousemove", onMouseMove);
+window.addEventListener("resize", () => {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  composer.setSize(window.innerWidth, window.innerHeight);
+});
